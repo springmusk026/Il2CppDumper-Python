@@ -43,7 +43,6 @@ files/
 *.dylib
 
 # Output files
-output/
 dump.cs
 il2cpp.h
 script.json

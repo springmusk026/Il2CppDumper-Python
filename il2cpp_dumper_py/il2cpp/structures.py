@@ -268,6 +268,7 @@ class Il2CppMethodDefinition:
     rgctx_start_index: int = version_field(max_ver=24.1, default=0)
     rgctx_count: int = version_field(max_ver=24.1, default=0)
     token: int = 0  # uint
+    token2: int = 0  # uint
     flags: int = ushort_field(0)
     iflags: int = ushort_field(0)
     slot: int = ushort_field(0)
