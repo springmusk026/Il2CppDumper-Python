@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IL2CPP Dumper - Unity Game Metadata Extractor</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'cyber-blue': '#00d4ff',
+                        'cyber-green': '#00ff88',
+                        'cyber-dark': '#0a0a1a',
+                        'cyber-darker': '#050510',
+                    },
+                    animation: {
+                        'float': 'float 3s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        'float': {
+                            '0%, 100%': { transform: 'translateY(0px)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a3e 50%, #0a0a1a 100%);
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .drop-zone-active {
+            border-color: #00d4ff !important;
+            background: rgba(0, 212, 255, 0.1) !important;
+        }
+        .progress-gradient {
+            background: linear-gradient(90deg, #00d4ff, #00ff88, #00d4ff);
+            background-size: 200% 100%;
+            animation: shimmer 2s linear infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .console-output {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .console-output::-webkit-scrollbar {
+            width: 8px;
+        }
+        .console-output::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.3);
+        }
+        .console-output::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+        }
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="min-h-screen text-gray-200 antialiased" x-data="dumperApp()" x-init="init()">
+    <div class="container mx-auto px-4 py-8 max-w-5xl">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <div class="inline-flex items-center gap-3 mb-4">
+                <i data-lucide="gamepad-2" class="w-10 h-10 text-cyber-blue animate-float"></i>
+                <h1 class="text-4xl font-bold bg-gradient-to-r from-cyber-blue to-cyber-green bg-clip-text text-transparent">
+                    IL2CPP Dumper
+                </h1>
+            </div>
+            <p class="text-gray-400">Extract metadata from Unity IL2CPP games</p>
+        </header>
+
+        <div class="grid gap-6 lg:grid-cols-2">
+            <!-- Left Column: Upload & Controls -->
+            <div class="space-y-6">
+                <!-- Upload Card -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i data-lucide="upload" class="w-5 h-5 text-cyber-blue"></i>
+                        Upload Files
+                    </h2>
+
+                    <!-- Drop Zone -->
+                    <div
+                        class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center transition-all duration-300 cursor-pointer hover:border-cyber-blue/50"
+                        :class="{ 'drop-zone-active': isDragging }"
+                        @click="$refs.fileInput.click()"
+                        @dragover.prevent="isDragging = true"
+                        @dragleave.prevent="isDragging = false"
+                        @drop.prevent="handleDrop($event)"
+                    >
+                        <input
+                            type="file"
+                            x-ref="fileInput"
+                            class="hidden"
+                            multiple
+                            accept=".so,.dll,.dat,.dylib"
+                            @change="handleFileSelect($event)"
+                        >
+                        <div class="flex flex-col items-center gap-3">
+                            <div class="w-12 h-12 rounded-full bg-cyber-blue/10 flex items-center justify-center">
+                                <i data-lucide="cloud-upload" class="w-6 h-6 text-cyber-blue"></i>
+                            </div>
+                            <div>
+                                <p class="font-medium text-white">Drop files here or click to browse</p>
+                                <p class="text-sm text-gray-500 mt-1">libil2cpp.so + global-metadata.dat</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- File List -->
+                    <div x-show="files.length > 0" class="mt-4 space-y-2" x-cloak>
+                        <template x-for="(file, index) in files" :key="file.name">
+                            <div class="flex items-center justify-between bg-gray-800/50 rounded-lg px-3 py-2 group">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="text-xs" :class="file.status === 'uploaded' ? 'text-cyber-green' : 'text-gray-500'" x-text="getUploadStatusIcon(file.status)"></span>
+                                    <span class="font-medium text-sm truncate" x-text="file.name"></span>
+                                    <span class="text-xs text-gray-500 shrink-0" x-text="formatSize(file.size)"></span>
+                                    <span
+                                        x-show="file.type === 'metadata'"
+                                        class="px-1.5 py-0.5 bg-cyber-green/20 text-cyber-green text-xs rounded shrink-0"
+                                    >meta</span>
+                                    <span
+                                        x-show="file.type === 'binary'"
+                                        class="px-1.5 py-0.5 bg-cyber-blue/20 text-cyber-blue text-xs rounded shrink-0"
+                                    >bin</span>
+                                </div>
+                                <button
+                                    @click.stop="removeFile(index)"
+                                    class="p-1 text-gray-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                    :disabled="isUploading || isProcessing"
+                                >
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Validation -->
+                    <div x-show="validationMessage" class="mt-3 flex items-center gap-2 text-amber-400 text-sm" x-cloak>
+                        <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+                        <span x-text="validationMessage"></span>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div x-show="status === 'uploading' || status === 'processing'" class="mt-4" x-cloak>
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span x-text="statusMessage"></span>
+                            <span x-text="Math.round(totalProgress) + '%'"></span>
+                        </div>
+                        <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
+                            <div class="h-full progress-gradient transition-all duration-300" :style="{ width: totalProgress + '%' }"></div>
+                        </div>
+                    </div>
+
+                    <!-- Start Button -->
+                    <button
+                        @click="startDump()"
+                        :disabled="!canStart"
+                        class="mt-4 w-full py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2"
+                        :class="canStart ? 'bg-gradient-to-r from-cyber-blue to-cyber-green text-black hover:shadow-lg hover:shadow-cyber-blue/30' : 'bg-gray-700 text-gray-400 cursor-not-allowed'"
+                    >
+                        <template x-if="!isUploading && !isProcessing">
+                            <span class="flex items-center gap-2">
+                                <i data-lucide="rocket" class="w-5 h-5"></i>
+                                Start Dump
+                            </span>
+                        </template>
+                        <template x-if="isUploading">
+                            <span class="flex items-center gap-2">
+                                <svg class="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                                Uploading...
+                            </span>
+                        </template>
+                        <template x-if="isProcessing">
+                            <span class="flex items-center gap-2">
+                                <svg class="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                                Processing...
+                            </span>
+                        </template>
+                    </button>
+                </div>
+
+                <!-- Status & Downloads -->
+                <div x-show="status === 'completed' || status === 'failed'" class="glass-card rounded-2xl p-6" x-cloak>
+                    <!-- Success -->
+                    <template x-if="status === 'completed'">
+                        <div>
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center gap-2 text-cyber-green">
+                                    <i data-lucide="check-circle" class="w-5 h-5"></i>
+                                    <span class="font-semibold">Dump Completed!</span>
+                                </div>
+                                <a
+                                    :href="`/api/download/${jobId}/all.zip`"
+                                    class="flex items-center gap-2 px-3 py-1.5 bg-cyber-green/20 text-cyber-green rounded-lg hover:bg-cyber-green/30 transition-colors text-sm font-medium"
+                                >
+                                    <i data-lucide="archive" class="w-4 h-4"></i>
+                                    Download All (ZIP)
+                                </a>
+                            </div>
+                            <div class="space-y-2">
+                                <template x-for="file in outputFiles" :key="file">
+                                    <a
+                                        :href="`/api/download/${jobId}/${file}`"
+                                        class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-700/50 transition-colors"
+                                    >
+                                        <i data-lucide="file-down" class="w-5 h-5 text-cyber-green"></i>
+                                        <div class="flex-1 min-w-0">
+                                            <span class="font-medium text-sm" x-text="file"></span>
+                                            <span class="text-xs text-gray-500 block" x-text="getFileDescription(file)"></span>
+                                        </div>
+                                        <i data-lucide="download" class="w-4 h-4 text-gray-400"></i>
+                                    </a>
+                                </template>
+                            </div>
+                            <button @click="reset()" class="mt-4 w-full py-2 border border-gray-600 rounded-lg text-gray-300 hover:bg-gray-800 transition-colors text-sm">
+                                Start New Dump
+                            </button>
+                        </div>
+                    </template>
+
+                    <!-- Error -->
+                    <template x-if="status === 'failed'">
+                        <div>
+                            <div class="flex items-center gap-2 text-red-400 mb-3">
+                                <i data-lucide="x-circle" class="w-5 h-5"></i>
+                                <span class="font-semibold">Dump Failed</span>
+                            </div>
+                            <p class="text-sm text-gray-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3" x-text="errorMessage"></p>
+                            <button @click="reset()" class="mt-4 w-full py-2 border border-gray-600 rounded-lg text-gray-300 hover:bg-gray-800 transition-colors text-sm">
+                                Try Again
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Right Column: Console -->
+            <div class="glass-card rounded-2xl p-6 flex flex-col" style="min-height: 500px;">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold flex items-center gap-2">
+                        <i data-lucide="terminal" class="w-5 h-5 text-cyber-green"></i>
+                        Console
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <label class="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                            <input type="checkbox" x-model="consoleAutoScroll" class="w-3 h-3 rounded bg-gray-700 border-gray-600">
+                            Auto-scroll
+                        </label>
+                        <button @click="clearConsole()" class="p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-700" title="Clear console">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    id="console-output"
+                    class="flex-1 bg-gray-900/80 rounded-lg p-3 overflow-y-auto console-output"
+                >
+                    <template x-if="consoleLines.length === 0">
+                        <div class="text-gray-500 text-center py-8">
+                            <i data-lucide="terminal" class="w-8 h-8 mx-auto mb-2 opacity-50"></i>
+                            <p>Console output will appear here</p>
+                        </div>
+                    </template>
+                    <template x-for="(line, i) in consoleLines" :key="i">
+                        <div class="flex gap-2">
+                            <span class="text-gray-600 shrink-0" x-text="line.timestamp"></span>
+                            <span :class="getLineClass(line.type)" x-text="line.message"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Section -->
+        <div class="grid gap-6 md:grid-cols-3 mt-8">
+            <div class="glass-card rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <i data-lucide="cpu" class="w-5 h-5 text-cyber-blue"></i>
+                    <span class="font-medium">Supported Versions</span>
+                </div>
+                <p class="text-sm text-gray-400">IL2CPP versions 16-31</p>
+            </div>
+            <div class="glass-card rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <i data-lucide="file-code" class="w-5 h-5 text-cyber-blue"></i>
+                    <span class="font-medium">Binary Formats</span>
+                </div>
+                <p class="text-sm text-gray-400">ELF, PE, Mach-O, NSO, WASM</p>
+            </div>
+            <div class="glass-card rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <i data-lucide="zap" class="w-5 h-5 text-cyber-blue"></i>
+                    <span class="font-medium">Chunked Upload</span>
+                </div>
+                <p class="text-sm text-gray-400">Supports files up to 500MB</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="text-center text-gray-500 text-sm mt-8 space-y-2">
+            <p>
+                Python port of
+                <a href="https://github.com/Perfare/Il2CppDumper" target="_blank" class="text-cyber-blue hover:underline">Il2CppDumper</a>
+            </p>
+            <p class="flex items-center justify-center gap-4">
+                <a href="/api/docs" class="flex items-center gap-1 hover:text-cyber-blue transition-colors">
+                    <i data-lucide="book-open" class="w-4 h-4"></i>
+                    API Docs
+                </a>
+            </p>
+        </footer>
+    </div>
+
+    <!-- App Script (must load before Alpine) -->
+    <script src="/static/js/app.js"></script>
+
+    <!-- Initialize Lucide -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => lucide.createIcons());
+        document.addEventListener('alpine:initialized', () => {
+            let timeout;
+            new MutationObserver(() => {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => lucide.createIcons(), 50);
+            }).observe(document.body, { childList: true, subtree: true });
+        });
+    </script>
+</body>
+</html>

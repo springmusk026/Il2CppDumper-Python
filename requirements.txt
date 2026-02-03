@@ -1,0 +1,8 @@
+# IL2CPP Dumper Python Port
+
+# Web server
+flask>=2.0.0
+werkzeug>=2.0.0
+
+# Development
+autopep8
