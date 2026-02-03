@@ -1,0 +1,790 @@
+openapi: 3.0.3
+info:
+  title: IL2CPP Dumper API
+  description: |
+    REST API for the IL2CPP Dumper Python port.
+    
+    This API allows you to:
+    - Create dump jobs for Unity IL2CPP compiled games
+    - Upload IL2CPP binaries and metadata files (chunked or direct)
+    - Monitor job progress via Server-Sent Events (SSE)
+    - Download extracted output files
+    
+    ## Workflow
+    1. Create a job with `POST /api/jobs`
+    2. Upload files using chunked upload (`POST /api/jobs/{jobId}/upload`) or direct upload (`POST /api/jobs/{jobId}/upload-direct`)
+    3. Start processing with `POST /api/jobs/{jobId}/start`
+    4. Monitor progress via SSE stream (`GET /api/jobs/{jobId}/stream`)
+    5. Download results (`GET /api/download/{jobId}/{filename}`)
+  version: 2.0.0
+  contact:
+    name: springmusk026
+    url: https://github.com/springmusk026/Il2CppDumper-Python
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+
+tags:
+  - name: Jobs
+    description: Job management endpoints
+  - name: Upload
+    description: File upload endpoints
+  - name: Download
+    description: File download endpoints
+  - name: Legacy
+    description: Legacy API endpoints for backwards compatibility
+  - name: Documentation
+    description: API documentation endpoints
+
+paths:
+  /:
+    get:
+      summary: Web Interface
+      description: Serves the main web UI for the IL2CPP Dumper
+      operationId: getIndex
+      responses:
+        '200':
+          description: HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /static/{filename}:
+    get:
+      summary: Static Files
+      description: Serves static files (CSS, JavaScript, images)
+      operationId: getStaticFile
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          description: Path to the static file
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Static file content
+        '404':
+          description: File not found
+
+  /api/jobs:
+    post:
+      summary: Create Job
+      description: Create a new IL2CPP dump job. Returns a job ID to be used for uploading files and starting the job.
+      operationId: createJob
+      tags:
+        - Jobs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+            example:
+              files:
+                - name: libil2cpp.so
+                  size: 52428800
+                  type: binary
+                - name: global-metadata.dat
+                  size: 10485760
+                  type: metadata
+      responses:
+        '200':
+          description: Job created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateJobResponse'
+              example:
+                job_id: "550e8400-e29b-41d4-a716-446655440000"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noFiles:
+                  value:
+                    error: "No files specified"
+                insufficientFiles:
+                  value:
+                    error: "Need both IL2CPP binary and metadata file"
+                sizeLimitExceeded:
+                  value:
+                    error: "Total size exceeds 500MB limit"
+
+  /api/jobs/{jobId}/upload:
+    post:
+      summary: Upload File Chunk
+      description: |
+        Upload a file chunk for chunked file uploads. 
+        Use this for large files that need to be split into multiple chunks.
+        When all chunks are received, the file is automatically assembled.
+      operationId: uploadChunk
+      tags:
+        - Upload
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChunkUploadRequest'
+      responses:
+        '200':
+          description: Chunk uploaded successfully
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChunkUploadPartialResponse'
+                  - $ref: '#/components/schemas/ChunkUploadCompleteResponse'
+              examples:
+                partial:
+                  summary: Partial upload
+                  value:
+                    status: partial
+                    chunk: 5
+                    received: 6
+                    total: 10
+                complete:
+                  summary: File complete
+                  value:
+                    status: complete
+                    filename: libil2cpp.so
+                    type: binary
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noChunk:
+                  value:
+                    error: "No chunk provided"
+                invalidFilename:
+                  value:
+                    error: "Invalid filename"
+                unexpectedFile:
+                  value:
+                    error: "Unexpected file"
+                notAccepting:
+                  value:
+                    error: "Job is not accepting uploads"
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/upload-direct:
+    post:
+      summary: Direct Upload
+      description: |
+        Direct upload of complete files (for smaller files, typically under 50MB).
+        Multiple files can be uploaded in a single request.
+      operationId: uploadDirect
+      tags:
+        - Upload
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Files to upload
+              required:
+                - files
+      responses:
+        '200':
+          description: Files uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectUploadResponse'
+              example:
+                status: complete
+                files:
+                  - filename: libil2cpp.so
+                    type: binary
+                  - filename: global-metadata.dat
+                    type: metadata
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noFiles:
+                  value:
+                    error: "No files provided"
+                notAccepting:
+                  value:
+                    error: "Job is not accepting uploads"
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/start:
+    post:
+      summary: Start Job
+      description: |
+        Start processing the dump job. 
+        Both IL2CPP binary and metadata file must be uploaded before starting.
+      operationId: startJob
+      tags:
+        - Jobs
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      responses:
+        '200':
+          description: Job started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [started]
+              example:
+                status: started
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                wrongStatus:
+                  value:
+                    error: "Job cannot be started (status: processing)"
+                missingBinary:
+                  value:
+                    error: "IL2CPP binary not uploaded"
+                missingMetadata:
+                  value:
+                    error: "Metadata file not uploaded"
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/stream:
+    get:
+      summary: Job Event Stream
+      description: |
+        Server-Sent Events (SSE) endpoint for real-time job progress updates.
+        
+        ## Event Types
+        - `status` - Initial status with current progress
+        - `log` - Log messages (info, success, error, warning)
+        - `progress` - Progress updates (0-100)
+        - `completed` - Job completed successfully with output files list
+        - `failed` - Job failed with error message
+        
+        ## Example Events
+        ```
+        data: {"type": "status", "status": "processing", "progress": 10}
+        
+        data: {"type": "log", "level": "info", "message": "Loading metadata..."}
+        
+        data: {"type": "progress", "progress": 50, "message": "Generating dump.cs..."}
+        
+        data: {"type": "completed", "files": ["dump.cs", "il2cpp.h", "script.json"]}
+        ```
+      operationId: streamJob
+      tags:
+        - Jobs
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                data: {"type": "status", "status": "processing", "progress": 10}
+                
+                data: {"type": "log", "level": "info", "message": "Loading metadata..."}
+                
+                data: {"type": "progress", "progress": 50, "message": "Generating dump.cs..."}
+                
+                data: {"type": "completed", "files": ["dump.cs", "il2cpp.h"]}
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}:
+    get:
+      summary: Get Job Status
+      description: Get the current status and details of a job
+      operationId: getJobStatus
+      tags:
+        - Jobs
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                status: completed
+                progress: 100
+                error: null
+                files:
+                  - dump.cs
+                  - il2cpp.h
+                  - script.json
+                  - stringliteral.json
+                created: 1706958303.123456
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/download/{jobId}/{filename}:
+    get:
+      summary: Download Output File
+      description: Download a specific output file from a completed job
+      operationId: downloadFile
+      tags:
+        - Download
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+        - name: filename
+          in: path
+          required: true
+          description: Name of the file to download
+          schema:
+            type: string
+          examples:
+            dumpCs:
+              value: dump.cs
+              summary: C# dump file
+            il2cppH:
+              value: il2cpp.h
+              summary: C header file
+            scriptJson:
+              value: script.json
+              summary: Script JSON file
+            stringLiteralJson:
+              value: stringliteral.json
+              summary: String literals JSON file
+      responses:
+        '200':
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: Attachment filename
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notCompleted:
+                  value:
+                    error: "Job not completed"
+                invalidPath:
+                  value:
+                    error: "Invalid path"
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                jobNotFound:
+                  value:
+                    error: "Job not found"
+                fileNotFound:
+                  value:
+                    error: "File not found"
+
+  /api/download/{jobId}/all.zip:
+    get:
+      summary: Download All Files as ZIP
+      description: Download all output files from a completed job as a single ZIP archive
+      operationId: downloadAllZip
+      tags:
+        - Download
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      responses:
+        '200':
+          description: ZIP archive containing all output files
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: 'Attachment filename (e.g., il2cpp_dump_550e8400.zip)'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Job not completed"
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                jobNotFound:
+                  value:
+                    error: "Job not found"
+                noFiles:
+                  value:
+                    error: "No output files"
+
+  /api/dump:
+    post:
+      summary: Legacy Dump (Single Request)
+      description: |
+        Legacy single-request dump endpoint for backwards compatibility.
+        Uploads files and starts processing in a single request.
+        For better control and large file support, use the modern chunked upload API.
+      operationId: legacyDump
+      tags:
+        - Legacy
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: IL2CPP binary and metadata files
+              required:
+                - files
+      responses:
+        '200':
+          description: Job created and started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateJobResponse'
+              example:
+                job_id: "550e8400-e29b-41d4-a716-446655440000"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noFiles:
+                  value:
+                    error: "No files uploaded"
+                insufficientFiles:
+                  value:
+                    error: "Need both IL2CPP binary and metadata file"
+                identifyFailed:
+                  value:
+                    error: "Could not identify files"
+
+  /api/status/{jobId}:
+    get:
+      summary: Legacy Job Status
+      description: Legacy status endpoint for backwards compatibility
+      operationId: legacyStatus
+      tags:
+        - Legacy
+      deprecated: true
+      parameters:
+        - $ref: '#/components/parameters/jobId'
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyJobStatus'
+              example:
+                status: completed
+                progress: 100
+                files:
+                  - dump.cs
+                  - il2cpp.h
+                error: null
+                created: 1706958303.123456
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/docs:
+    get:
+      summary: API Documentation
+      description: Returns JSON documentation of the API endpoints
+      operationId: getApiDocs
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: API documentation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiDocumentation'
+
+components:
+  parameters:
+    jobId:
+      name: jobId
+      in: path
+      required: true
+      description: Unique job identifier (UUID format)
+      schema:
+        type: string
+        format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+  responses:
+    JobNotFound:
+      description: Job not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Job not found"
+
+  schemas:
+    CreateJobRequest:
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required:
+              - name
+              - size
+            properties:
+              name:
+                type: string
+                description: Original filename
+                example: libil2cpp.so
+              size:
+                type: integer
+                description: File size in bytes
+                example: 52428800
+              type:
+                type: string
+                enum: [binary, metadata]
+                description: File type (auto-detected if not provided)
+                example: binary
+
+    CreateJobResponse:
+      type: object
+      required:
+        - job_id
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique job identifier
+
+    ChunkUploadRequest:
+      type: object
+      required:
+        - chunk
+        - filename
+        - chunk_index
+        - total_chunks
+      properties:
+        chunk:
+          type: string
+          format: binary
+          description: The file chunk data
+        filename:
+          type: string
+          description: Original filename
+        chunk_index:
+          type: integer
+          minimum: 0
+          description: Zero-based chunk index
+        total_chunks:
+          type: integer
+          minimum: 1
+          description: Total number of chunks for this file
+        file_type:
+          type: string
+          enum: [binary, metadata]
+          description: File type hint (optional, auto-detected)
+
+    ChunkUploadPartialResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [partial]
+        chunk:
+          type: integer
+          description: Chunk index that was received
+        received:
+          type: integer
+          description: Total chunks received so far
+        total:
+          type: integer
+          description: Total chunks expected
+
+    ChunkUploadCompleteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [complete]
+        filename:
+          type: string
+          description: Sanitized filename
+        type:
+          type: string
+          enum: [binary, metadata]
+          description: Detected file type
+
+    DirectUploadResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [complete]
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              filename:
+                type: string
+                description: Sanitized filename
+              type:
+                type: string
+                enum: [binary, metadata]
+                description: Detected file type
+
+    JobStatus:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Job ID
+        status:
+          type: string
+          enum: [created, uploading, processing, completed, failed]
+          description: Current job status
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Progress percentage
+        error:
+          type: string
+          nullable: true
+          description: Error message if job failed
+        files:
+          type: array
+          items:
+            type: string
+          description: List of output files (when completed)
+        created:
+          type: number
+          format: double
+          description: Unix timestamp when job was created
+
+    LegacyJobStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [created, uploading, processing, completed, failed]
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        files:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
+          nullable: true
+        created:
+          type: number
+          format: double
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+
+    ApiDocumentation:
+      type: object
+      properties:
+        name:
+          type: string
+          example: IL2CPP Dumper API
+        version:
+          type: string
+          example: "2.0.0"
+        endpoints:
+          type: object
+          additionalProperties:
+            type: object
+        limits:
+          type: object
+          properties:
+            max_upload_size:
+              type: string
+              example: "500 MB"
+            job_retention:
+              type: string
+              example: "30 minutes"
+        legacy_endpoints:
+          type: object
+          additionalProperties:
+            type: string
