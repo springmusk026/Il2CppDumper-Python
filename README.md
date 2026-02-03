@@ -19,6 +19,14 @@ A high-performance Python port of [IL2CPP Dumper](https://github.com/Perfare/Il2
   - `script.json` - Method addresses for scripting
   - `stringliteral.json` - String literal data
 
+## 📸 Screenshots
+
+### Web Interface
+![Web Interface](static/images/127.0.0.1_5000_.png)
+
+### Output Preview
+![Output Preview](static/images/image.png)
+
 ## 🚀 Quick Start
 
 ### Installation
